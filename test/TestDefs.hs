@@ -29,10 +29,19 @@ import Test.QuickCheck.Instances ()
   !% "Quux"
   ?% "Muux" [t|XmlQuux|]
 
+"Same" =:= record
+  ! "Type"  [t|Text|]
+  !% "type" [t|Int|]
+
 "Root" =:= record
   ! "{http://example.com/ns/my-namespace}Foo"
+  ! "Same"
 
 instance Arbitrary XmlRoot where
+  arbitrary = genericArbitrary
+  shrink = genericShrink
+
+instance Arbitrary XmlSame where
   arbitrary = genericArbitrary
   shrink = genericShrink
 

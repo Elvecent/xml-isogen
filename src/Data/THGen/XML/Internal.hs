@@ -1,27 +1,30 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE CPP                    #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE UndecidableInstances   #-}
 
 module Data.THGen.XML.Internal where
 
 import           Control.DeepSeq
-import           Control.Lens hiding (repeated, enum, (&), Strict)
-import           Control.Lens.Internal.FieldTH (makeFieldOpticsForDec)
-import qualified Data.Char as C
-import           Data.List.NonEmpty (NonEmpty)
-import           Data.Maybe (maybeToList, mapMaybe)
+import           Control.Lens                         hiding (Strict, enum,
+                                                       repeated, (&))
+import           Control.Lens.Internal.FieldTH        (makeFieldOpticsForDec)
+import qualified Data.Char                            as C
+import           Data.Function                        (on)
+import qualified Data.List                            as L
+import           Data.List.NonEmpty                   (NonEmpty)
+import           Data.Maybe                           (mapMaybe, maybeToList)
 import           Data.String
-import           Data.THGen.Compat as THC
+import           Data.THGen.Compat                    as THC
 import           Data.THGen.Enum
-import qualified Data.Text as T
-import           GHC.Generics (Generic)
-import           Language.Haskell.TH as TH hiding (Strict)
-import           Prelude hiding ((+), (*), (^))
-import qualified Text.XML as X
-import           Text.XML.DOM.Parser hiding (parseContent)
+import qualified Data.Text                            as T
+import           GHC.Generics                         (Generic)
+import           Language.Haskell.TH                  as TH hiding (Strict)
+import           Prelude                              hiding ((*), (+), (^))
+import qualified Text.XML                             as X
+import           Text.XML.DOM.Parser                  hiding (parseContent)
 import           Text.XML.DOM.Parser.Internal.Content
 import           Text.XML.ParentAttributes
-import qualified Text.XML.Writer as XW
+import qualified Text.XML.Writer                      as XW
 
 data ParserMode
   = Strict
@@ -36,9 +39,9 @@ data GenType
 
 isLenientType :: GenType -> Bool
 isLenientType = \case
-  LenientParser -> True
+  LenientParser             -> True
   LenientParserAndGenerator -> True
-  _ -> False
+  _                         -> False
 
 data XmlFieldPlural
   = XmlFieldPluralMandatory  -- Occurs exactly 1 time (Identity)
@@ -65,9 +68,11 @@ data IsoXmlDescAttribute = IsoXmlDescAttribute XmlAttributePlural String TH.Type
 data IsoXmlDescContent = IsoXmlDescContent String TH.TypeQ
 
 data IsoXmlDescRecordPart
-  = IsoXmlDescRecordField IsoXmlDescField
+  = IsoXmlDescRecordField     IsoXmlDescField
   | IsoXmlDescRecordAttribute IsoXmlDescAttribute
-  | IsoXmlDescRecordContent IsoXmlDescContent
+  | IsoXmlDescRecordContent   IsoXmlDescContent
+
+makePrisms ''IsoXmlDescRecordPart
 
 data IsoXmlDescRecord = IsoXmlDescRecord GenType [IsoXmlDescRecordPart]
 
@@ -146,9 +151,46 @@ class Description name desc | desc -> name where
 
 infix 0 =:=
 
+recordPartName :: Traversal' IsoXmlDescRecordPart String
+recordPartName f = \case
+  (IsoXmlDescRecordField (IsoXmlDescField pl name ty)) ->
+    (\n -> IsoXmlDescRecordField (IsoXmlDescField pl n ty)) <$> f name
+  (IsoXmlDescRecordAttribute (IsoXmlDescAttribute pl name ty)) ->
+    (\n -> IsoXmlDescRecordAttribute (IsoXmlDescAttribute pl n ty)) <$> f name
+  (IsoXmlDescRecordContent (IsoXmlDescContent name ty)) ->
+    (\n -> IsoXmlDescRecordContent (IsoXmlDescContent n ty)) <$> f name
+
+attributeName :: Traversal' IsoXmlDescAttribute String
+attributeName f (IsoXmlDescAttribute pl name ty) =
+  (\n -> IsoXmlDescAttribute pl n ty) <$> f name
+
+fieldAttrSameName :: IsoXmlDescRecordPart -> IsoXmlDescRecordPart -> Bool
+fieldAttrSameName =
+  (==) `on` over _head C.toUpper `on` view recordPartName
+
+compareName :: IsoXmlDescRecordPart -> IsoXmlDescRecordPart -> Ordering
+compareName = compare `on` view recordPartName
+
+groupedByName :: Iso' [IsoXmlDescRecordPart] [[IsoXmlDescRecordPart]]
+groupedByName = iso
+  (L.groupBy fieldAttrSameName . L.sortBy compareName)
+  L.concat
+
+addAttrPostfixWhereClashes :: [IsoXmlDescRecordPart] -> [IsoXmlDescRecordPart]
+addAttrPostfixWhereClashes rps = groupedByName
+  . traversed
+  . filtered ((>1) . length)
+  . traversed
+  . _IsoXmlDescRecordAttribute
+  . attributeName <>~ "Attr"
+  $ rps
+
 instance Description PrefixName IsoXmlDescRecord where
   prefixName =:= (IsoXmlDescRecord genType descRecordParts) =
-    isoXmlGenerateDatatype genType prefixName (reverse descRecordParts)
+    isoXmlGenerateDatatype
+    genType
+    prefixName
+    (reverse $ addAttrPostfixWhereClashes descRecordParts)
 
 record :: GenType -> IsoXmlDescRecord
 record gt = IsoXmlDescRecord gt []
@@ -338,8 +380,8 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
                 fieldStrName     = xmlLocalName rawName
                 exprFieldStrName = TH.litE (TH.stringL fieldStrName)
                 fieldParse       = case fieldPlural of
-                  XmlFieldPluralMandatory  -> [e|inElem|]
-                  _                        -> [e|inElemTrav|]
+                  XmlFieldPluralMandatory -> [e|inElem|]
+                  _                       -> [e|inElemTrav|]
               in case mode of
                 Strict -> [e|$fieldParse $exprFieldStrName fromDom|]
                 Lenient -> [e|$fieldParse $exprFieldStrName (ignoreBlank fromDom)|]
@@ -371,8 +413,8 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
                 fName            = TH.mkName (fieldName fieldStrName)
                 exprFieldStrName = TH.litE (TH.stringL rawName)
                 exprForField     = case fieldPlural of
-                  XmlFieldPluralMandatory  -> [e|id|]
-                  _                        -> [e|traverse|]
+                  XmlFieldPluralMandatory -> [e|id|]
+                  _                       -> [e|traverse|]
                 exprFieldValue   = [e|$(TH.varE fName) $(TH.varE objName)|]
                 exprFieldRender  =
                   [e|(\a ->

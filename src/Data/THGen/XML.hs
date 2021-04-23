@@ -1,5 +1,5 @@
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE UndecidableInstances   #-}
 
 {- |
 
@@ -123,23 +123,26 @@ module Data.THGen.XML
   ) where
 
 import           Control.DeepSeq
-import           Control.Lens hiding (repeated, enum, (&))
-import           Control.Lens.Internal.FieldTH (makeFieldOpticsForDec)
-import qualified Data.Char as C
-import           Data.List.NonEmpty (NonEmpty)
-import           Data.Maybe (maybeToList, mapMaybe)
+import           Control.Lens                         hiding (enum, repeated,
+                                                       (&))
+import           Control.Lens.Internal.FieldTH        (makeFieldOpticsForDec)
+import qualified Data.Char                            as C
+import           Data.Function                        (on)
+import qualified Data.List                            as L
+import           Data.List.NonEmpty                   (NonEmpty)
+import           Data.Maybe                           (mapMaybe, maybeToList)
 import           Data.String
 import           Data.THGen.Compat
 import           Data.THGen.Enum
-import qualified Data.Text as T
-import           GHC.Generics (Generic)
-import qualified Language.Haskell.TH as TH
-import           Prelude hiding ((+), (*), (^))
-import qualified Text.XML as X
-import           Text.XML.DOM.Parser hiding (parseContent)
+import qualified Data.Text                            as T
+import           GHC.Generics                         (Generic)
+import qualified Language.Haskell.TH                  as TH
+import           Prelude                              hiding ((*), (+), (^))
+import qualified Text.XML                             as X
+import           Text.XML.DOM.Parser                  hiding (parseContent)
+import           Text.XML.DOM.Parser.Internal.Content
 import           Text.XML.ParentAttributes
-import qualified Text.XML.Writer as XW
-import Text.XML.DOM.Parser.Internal.Content
+import qualified Text.XML.Writer                      as XW
 
 
 data XmlFieldPlural
@@ -170,6 +173,8 @@ data IsoXmlDescRecordPart
   = IsoXmlDescRecordField IsoXmlDescField
   | IsoXmlDescRecordAttribute IsoXmlDescAttribute
   | IsoXmlDescRecordContent IsoXmlDescContent
+
+makePrisms ''IsoXmlDescRecordPart
 
 newtype IsoXmlDescRecord = IsoXmlDescRecord [IsoXmlDescRecordPart]
 
@@ -248,10 +253,46 @@ class Description name desc | desc -> name where
 
 infix 0 =:=
 
+recordPartName :: Traversal' IsoXmlDescRecordPart String
+recordPartName f = \case
+  (IsoXmlDescRecordField (IsoXmlDescField pl name ty)) ->
+    (\n -> IsoXmlDescRecordField (IsoXmlDescField pl n ty)) <$> f name
+  (IsoXmlDescRecordAttribute (IsoXmlDescAttribute pl name ty)) ->
+    (\n -> IsoXmlDescRecordAttribute (IsoXmlDescAttribute pl n ty)) <$> f name
+  (IsoXmlDescRecordContent (IsoXmlDescContent name ty)) ->
+    (\n -> IsoXmlDescRecordContent (IsoXmlDescContent n ty)) <$> f name
+
+attributeName :: Traversal' IsoXmlDescAttribute String
+attributeName f (IsoXmlDescAttribute pl name ty) =
+  (\n -> IsoXmlDescAttribute pl n ty) <$> f name
+
+fieldAttrSameName :: IsoXmlDescRecordPart -> IsoXmlDescRecordPart -> Bool
+fieldAttrSameName =
+  (==) `on` over _head C.toUpper `on` view recordPartName
+
+compareName :: IsoXmlDescRecordPart -> IsoXmlDescRecordPart -> Ordering
+compareName = compare `on` view recordPartName
+
+groupedByName :: Iso' [IsoXmlDescRecordPart] [[IsoXmlDescRecordPart]]
+groupedByName = iso
+  (L.groupBy fieldAttrSameName . L.sortBy compareName)
+  L.concat
+
+addAttrPostfixWhereClashes :: [IsoXmlDescRecordPart] -> [IsoXmlDescRecordPart]
+addAttrPostfixWhereClashes rps = groupedByName
+  . traversed
+  . filtered ((>1) . length)
+  . traversed
+  . _IsoXmlDescRecordAttribute
+  . attributeName <>~ "Attr"
+  $ rps
+
 instance Description PrefixName IsoXmlDescRecord where
   prefixName =:= descRecord =
     let descRecordParts = descRecord ^. _IsoXmlDescRecord
-    in isoXmlGenerateDatatype prefixName (reverse descRecordParts)
+    in isoXmlGenerateDatatype
+    prefixName
+    (reverse $ addAttrPostfixWhereClashes descRecordParts)
 
 record :: IsoXmlDescRecord
 record = IsoXmlDescRecord []
@@ -405,8 +446,8 @@ isoXmlGenerateDatatype (PrefixName strName' strPrefix') descRecordParts = do
               fieldStrName     = xmlLocalName rawName
               exprFieldStrName = TH.litE (TH.stringL fieldStrName)
               fieldParse       = case fieldPlural of
-                XmlFieldPluralMandatory  -> [e|inElem|]
-                _                        -> [e|inElemTrav|]
+                XmlFieldPluralMandatory -> [e|inElem|]
+                _                       -> [e|inElemTrav|]
             in
               [e|$fieldParse $exprFieldStrName fromDom|]
           IsoXmlDescRecordAttribute descAttribute ->
@@ -437,8 +478,8 @@ isoXmlGenerateDatatype (PrefixName strName' strPrefix') descRecordParts = do
               fName            = TH.mkName (fieldName fieldStrName)
               exprFieldStrName = TH.litE (TH.stringL rawName)
               exprForField     = case fieldPlural of
-                XmlFieldPluralMandatory  -> [e|id|]
-                _                        -> [e|traverse|]
+                XmlFieldPluralMandatory -> [e|id|]
+                _                       -> [e|traverse|]
               exprFieldValue   = [e|$(TH.varE fName) $(TH.varE objName)|]
               exprFieldRender  =
                 [e|(\a ->

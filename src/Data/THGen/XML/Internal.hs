@@ -19,6 +19,7 @@ import           Data.THGen.Enum
 import qualified Data.Text                            as T
 import           GHC.Generics                         (Generic)
 import           Language.Haskell.TH                  as TH hiding (Strict)
+import qualified Language.Haskell.TH.Syntax           as TH
 import           Prelude                              hiding ((*), (+), (^))
 import qualified Text.XML                             as X
 import           Text.XML.DOM.Parser                  hiding (parseContent)
@@ -409,24 +410,29 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
           case descRecordPart of
             IsoXmlDescRecordField (IsoXmlDescField fieldPlural rawName _) -> do
               let
-                fieldStrName     = xmlLocalName rawName
-                fName            = TH.mkName (fieldName fieldStrName)
-                exprFieldStrName = TH.litE (TH.stringL rawName)
-                exprForField     = case fieldPlural of
+                fieldStrName          = xmlLocalName rawName
+                fName                 = TH.mkName (fieldName fieldStrName)
+                exprFieldStrName      = TH.lift fieldStrName
+                exprFieldStrNamespace = TH.lift $ xmlNamespace rawName
+                exprFieldStrPrefix    = TH.lift $ xmlPrefix rawName
+                exprFieldFullName = [e|
+                    X.Name $exprFieldStrName $exprFieldStrNamespace $exprFieldStrPrefix
+                  |]
+                exprForField          = case fieldPlural of
                   XmlFieldPluralMandatory -> [e|id|]
                   _                       -> [e|traverse|]
                 exprFieldValue   = [e|$(TH.varE fName) $(TH.varE objName)|]
                 exprFieldRender  =
                   [e|(\a ->
-                    XW.elementA $exprFieldStrName (toXmlParentAttributes a) a)|]
+                      XW.elementA $exprFieldFullName (toXmlParentAttributes a) a)|]
               return [e|$exprForField $exprFieldRender $exprFieldValue|]
-            IsoXmlDescRecordContent (IsoXmlDescContent rawName _)     -> do
+            IsoXmlDescRecordContent (IsoXmlDescContent rawName _) -> do
               let
                 fieldStrName     = xmlLocalName rawName
                 fName            = TH.mkName (fieldName fieldStrName)
                 exprFieldValue   = [e|$(TH.varE fName) $(TH.varE objName)|]
               return [e|XW.content . toXmlAttribute $ $exprFieldValue|]
-            _                         -> []
+            _ -> []
         toXmlExpr
           = TH.lamE [if null exprFields then TH.wildP else TH.varP objName]
           $ foldr (\fe e -> [e|$fe *> $e|]) [e|return ()|] exprFields
@@ -496,4 +502,17 @@ distribPair (a, fb) = (a,) <$> fb
 -- >>> xmlLocalName "{http://example.com/ns/my-namespace}my-name"
 -- "my-name"
 xmlLocalName :: String -> String
-xmlLocalName = T.unpack . X.nameLocalName . fromString
+xmlLocalName = dropNamespace . T.unpack . X.nameLocalName . fromString
+  where
+    dropNamespace :: String -> String
+    dropNamespace name' = case dropWhile (/= ':') name' of
+      []         -> name'
+      _ : name'' -> name''
+
+xmlNamespace :: String -> Maybe String
+xmlNamespace = fmap T.unpack . X.nameNamespace  . fromString
+
+xmlPrefix :: String -> Maybe String
+xmlPrefix s = if s == mbPrefix then Nothing else Just mbPrefix
+  where
+    mbPrefix = takeWhile (':' /=) s

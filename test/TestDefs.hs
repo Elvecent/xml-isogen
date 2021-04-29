@@ -35,7 +35,7 @@ import Test.QuickCheck.Instances ()
 
 "Root" =:= record ParserAndGenerator
   ! "{http://example.com/ns/my-namespace}Foo"
-  ! "Same"
+  ! "ns:Same"
   
 instance Arbitrary XmlRoot where
   arbitrary = genericArbitrary

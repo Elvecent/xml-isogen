@@ -195,11 +195,15 @@ nonUnique = groupedByName
   . traversed
   . _2
 
-addAttrPostfixWhereClashes :: [IsoXmlDescRecordPart] -> [IsoXmlDescRecordPart]
-addAttrPostfixWhereClashes rps = nonUnique
-  . _IsoXmlDescRecordAttribute
-  . attributeName <>~ "Attr"
-  $ rps
+addAttrPostfixWhereClashes :: [IsoXmlDescRecordPart] -> [(IsoXmlDescRecordPart, String)]
+addAttrPostfixWhereClashes rps = zip
+  rps
+  (rps' ^.. traversed . recordPartName)
+  where
+    rps' = nonUnique
+      . _IsoXmlDescRecordAttribute
+      . attributeName <>~ "Attr"
+      $ rps
 
 instance Description PrefixName IsoXmlDescRecord where
   prefixName =:= (IsoXmlDescRecord genType descRecordParts) =
@@ -324,7 +328,7 @@ isoXmlGenerateEnum genType (ExhaustivenessName strName' exh) enumCons = do
       return $ enumDecls ++ [toXmlInst, toXmlAttributeInst,
         fromDomInst, fromAttributeInst]
 
-isoXmlGenerateDatatype :: GenType -> PrefixName -> [IsoXmlDescRecordPart] -> TH.DecsQ
+isoXmlGenerateDatatype :: GenType -> PrefixName -> [(IsoXmlDescRecordPart, String)] -> TH.DecsQ
 isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts = do
   let
     isNewtype     = length descRecordParts == 1
@@ -337,7 +341,7 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
       fields = do
         descRecordPart <- descRecordParts
         return $ case descRecordPart of
-          IsoXmlDescRecordField descField ->
+          (IsoXmlDescRecordField descField, _) ->
             let
               IsoXmlDescField fieldPlural rawName fieldType = descField
               fieldStrName = xmlLocalName rawName
@@ -353,18 +357,18 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
             in if isNewtype
               then THC.varStrictType fName (THC.nonStrictType fType)
               else THC.varStrictType fName (THC.strictType fType)
-          IsoXmlDescRecordAttribute descAttribute ->
+          (IsoXmlDescRecordAttribute descAttribute, attributeFieldName) ->
             let
               IsoXmlDescAttribute
-                attributePlural attributeStrName attributeType = descAttribute
-              fName = TH.mkName (fieldName attributeStrName)
+                attributePlural _ attributeType = descAttribute
+              fName = TH.mkName (fieldName attributeFieldName)
               fType = case attributePlural of
                 XmlAttributePluralMandatory -> attributeType
                 XmlAttributePluralOptional  -> [t| Maybe $attributeType |]
             in if isNewtype
               then THC.varStrictType fName (THC.nonStrictType fType)
               else THC.varStrictType fName (THC.strictType fType)
-          IsoXmlDescRecordContent descContent ->
+          (IsoXmlDescRecordContent descContent, _) ->
             let
               IsoXmlDescContent contentStrName contentType = descContent
               fName = TH.mkName (fieldName contentStrName)
@@ -388,7 +392,7 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
       let
         exprHeader      = [e|pure $(TH.conE name)|]
         exprRecordParts = do
-          descRecordPart <- descRecordParts
+          descRecordPart <- fmap fst descRecordParts
           return $ case descRecordPart of
             IsoXmlDescRecordField descField ->
               let
@@ -421,7 +425,7 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
       objName <- TH.newName strPrefix
       let
         exprFields = do
-          descRecordPart <- descRecordParts
+          descRecordPart <- fmap fst descRecordParts
           case descRecordPart of
             IsoXmlDescRecordField (IsoXmlDescField fieldPlural rawName _) -> do
               let
@@ -460,12 +464,12 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
       let
         exprAttributes            = do
           descRecordPart <- descRecordParts
-          IsoXmlDescAttribute attributePlural attributeStrName _ <-
+          (IsoXmlDescAttribute attributePlural attributeStrName _, attributeFieldName) <-
             maybeToList $ case descRecordPart of
-              IsoXmlDescRecordAttribute descAttribute -> Just descAttribute
+              (IsoXmlDescRecordAttribute descAttribute, attributeFieldName) -> Just (descAttribute, attributeFieldName)
               _                                       -> Nothing
           let
-            fName           = TH.mkName (fieldName attributeStrName)
+            fName           = TH.mkName (fieldName attributeFieldName)
             exprAttrStrName = TH.litE (TH.stringL attributeStrName)
             exprAttrValue   = [e|$(TH.varE fName) $(TH.varE objName)|]
             exprAttrWrap    = case attributePlural of

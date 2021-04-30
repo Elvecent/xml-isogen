@@ -4,6 +4,7 @@
 
 module Data.THGen.XML.Internal where
 
+import           Control.Category                     ((>>>))
 import           Control.DeepSeq
 import           Control.Lens                         hiding (Strict, enum,
                                                        repeated, (&))
@@ -166,22 +167,36 @@ attributeName f (IsoXmlDescAttribute pl name ty) =
   (\n -> IsoXmlDescAttribute pl n ty) <$> f name
 
 fieldAttrSameName :: IsoXmlDescRecordPart -> IsoXmlDescRecordPart -> Bool
-fieldAttrSameName =
-  (==) `on` over _head C.toUpper `on` view recordPartName
+fieldAttrSameName = (==)
+  `on` over _head C.toUpper
+  `on` view recordPartName
 
 compareName :: IsoXmlDescRecordPart -> IsoXmlDescRecordPart -> Ordering
 compareName = compare `on` view recordPartName
 
-groupedByName :: Iso' [IsoXmlDescRecordPart] [[IsoXmlDescRecordPart]]
+groupedByName :: Iso' [IsoXmlDescRecordPart] [[(Int, IsoXmlDescRecordPart)]]
 groupedByName = iso
-  (L.groupBy fieldAttrSameName . L.sortBy compareName)
-  L.concat
+  ( -- attach indices to preserve the original order
+    zip [1..] >>>
+    L.sortBy (compareName `on` snd) >>>
+    L.groupBy (fieldAttrSameName `on` snd)
+  )
+  ( L.concat >>>
+    -- restore the original order
+    L.sortBy (compare `on` fst) >>>
+    -- remove indices
+    fmap snd
+  )
+
+nonUnique :: Traversal' [IsoXmlDescRecordPart] IsoXmlDescRecordPart
+nonUnique = groupedByName
+  . traversed
+  . filtered (length >>> (>1))
+  . traversed
+  . _2
 
 addAttrPostfixWhereClashes :: [IsoXmlDescRecordPart] -> [IsoXmlDescRecordPart]
-addAttrPostfixWhereClashes rps = groupedByName
-  . traversed
-  . filtered ((>1) . length)
-  . traversed
+addAttrPostfixWhereClashes rps = nonUnique
   . _IsoXmlDescRecordAttribute
   . attributeName <>~ "Attr"
   $ rps

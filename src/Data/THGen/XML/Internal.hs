@@ -534,4 +534,4 @@ xmlNamespace = fmap T.unpack . X.nameNamespace  . fromString
 xmlPrefix :: String -> Maybe String
 xmlPrefix s = if s == mbPrefix then Nothing else Just mbPrefix
   where
-    mbPrefix = takeWhile (':' /=) s
+    mbPrefix = takeWhile (':' /=) $ T.unpack $ X.nameLocalName $ fromString s

@@ -431,11 +431,13 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
               let
                 fieldStrName          = xmlLocalName rawName
                 fName                 = TH.mkName (fieldName fieldStrName)
-                exprFieldStrName      = TH.lift fieldStrName
+                exprFieldStrName      = TH.lift $
+                  case xmlPrefix rawName of
+                    Nothing -> fieldStrName
+                    Just pref -> pref <> ":" <> fieldStrName
                 exprFieldStrNamespace = TH.lift $ xmlNamespace rawName
-                exprFieldStrPrefix    = TH.lift $ xmlPrefix rawName
                 exprFieldFullName = [e|
-                    X.Name $exprFieldStrName $exprFieldStrNamespace $exprFieldStrPrefix
+                    X.Name $exprFieldStrName $exprFieldStrNamespace Nothing
                   |]
                 exprForField          = case fieldPlural of
                   XmlFieldPluralMandatory -> [e|id|]

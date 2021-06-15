@@ -434,7 +434,10 @@ isoXmlGenerateDatatype genType (PrefixName strName' strPrefix') descRecordParts 
                 exprFieldStrName      = TH.lift $
                   case xmlPrefix rawName of
                     Nothing -> fieldStrName
-                    Just pref -> pref <> ":" <> fieldStrName
+                    Just pref ->
+                      case xmlNamespace rawName of
+                        Nothing -> pref <> ":" <> fieldStrName
+                        Just _  -> fieldStrName
                 exprFieldStrNamespace = TH.lift $ xmlNamespace rawName
                 exprFieldFullName = [e|
                     X.Name $exprFieldStrName $exprFieldStrNamespace Nothing
